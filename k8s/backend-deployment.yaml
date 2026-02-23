@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drone-backend
+  namespace: drone-delivery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drone-backend
+  template:
+    metadata:
+      labels:
+        app: drone-backend
+    spec:
+      containers:
+        - name: backend
+          image: drone-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
