@@ -7,11 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/health", (req, res) => {
-    res.status(200).send("OK");
-});
-
-
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
@@ -24,28 +19,44 @@ const io = new Server(server, {
 const devices = {}; // { [socketId]: { id, role, lat, lng, socketId } }
 const deviceSocketMap = {}; // deviceId -> socketId
 const deliveries = {}; // { [deliveryId]: { ... } }
+const restDevices = {}; // { [deviceId]: { id, role, lat, lng } } — devices registered via REST (Unity)
 
 // --- Constants ---
 const DISTANCE_ARRIVED = 50; // meters
 const DISTANCE_APPROACHING = 500; // meters
 
+// --- Helper: Merged device list (Socket.IO + REST devices) ---
+function getAllDevices() {
+    const socketDevices = Object.values(devices);
+    const restDeviceList = Object.values(restDevices);
+    // Merge: REST devices that aren't already in socket devices
+    const socketIds = new Set(socketDevices.map(d => d.id));
+    const merged = [...socketDevices];
+    for (const rd of restDeviceList) {
+        if (!socketIds.has(rd.id)) {
+            merged.push(rd);
+        }
+    }
+    return merged;
+}
+
 // --- Helper Functions ---
 function getDistance(lat1, lng1, lat2, lng2) {
     if (!lat1 || !lng1 || !lat2 || !lng2) return 999999;
     const R = 6371e3;
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-        Math.cos(φ1) * Math.cos(φ2) *
-        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const p1 = lat1 * Math.PI / 180;
+    const p2 = lat2 * Math.PI / 180;
+    const dp = (lat2 - lat1) * Math.PI / 180;
+    const dl = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dp / 2) * Math.sin(dp / 2) +
+        Math.cos(p1) * Math.cos(p2) *
+        Math.sin(dl / 2) * Math.sin(dl / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
 function broadcastDeviceList() {
-    const list = Object.values(devices);
+    const list = getAllDevices();
     io.emit('device_list', list);
 }
 
@@ -54,12 +65,129 @@ function broadcastAllDeliveries() {
     io.emit('active_deliveries_update', active);
 }
 
+// ============================================================
+// REST API ENDPOINTS
+// ============================================================
+
+app.get("/health", (req, res) => {
+    res.status(200).send("OK");
+});
+
+// --- REST Device Registration (for Unity drone & delivery points) ---
+// Register or heartbeat a device via REST (no Socket.IO needed)
+app.post('/api/device/register', (req, res) => {
+    const { deviceId, role, lat, lng } = req.body;
+    if (!deviceId || !role) {
+        return res.status(400).json({ error: 'deviceId and role are required' });
+    }
+
+    restDevices[deviceId] = {
+        id: deviceId,
+        role: role, // 'DRONE' or 'DESTINATION'
+        lat: lat || null,
+        lng: lng || null,
+        socketId: null, // REST device, no socket
+        source: 'REST'
+    };
+
+    console.log(`[REST] Device registered: ${deviceId} as ${role} (${lat}, ${lng})`);
+    broadcastDeviceList();
+    res.json({ ok: true, device: restDevices[deviceId] });
+});
+
+// Update location for REST-registered device
+app.post('/api/device/:deviceId/location', (req, res) => {
+    const { deviceId } = req.params;
+    const { lat, lng } = req.body;
+
+    if (restDevices[deviceId]) {
+        restDevices[deviceId].lat = lat;
+        restDevices[deviceId].lng = lng;
+        broadcastDeviceList();
+    }
+
+    res.json({ ok: true });
+});
+
+// Get all online devices (for debugging)
+app.get('/api/devices', (req, res) => {
+    res.json(getAllDevices());
+});
+
+// --- Unity Drone REST API ---
+// Unity polls this to check for assigned tasks
+app.get('/api/drone/:droneId/task', (req, res) => {
+    const { droneId } = req.params;
+    const task = Object.values(deliveries).find(
+        d => d.active && d.droneId === droneId
+    );
+    if (task) {
+        // Include destination device location if available
+        const destSocket = deviceSocketMap[task.destId];
+        const destDevice = destSocket ? devices[destSocket] : null;
+        res.json({
+            hasTask: true,
+            delivery: {
+                id: task.id,
+                droneId: task.droneId,
+                destId: task.destId,
+                items: task.items,
+                quantity: task.quantity,
+                notes: task.notes,
+                status: task.status,
+                destination: destDevice ? { lat: destDevice.lat, lng: destDevice.lng } : null
+            }
+        });
+    } else {
+        res.json({ hasTask: false });
+    }
+});
+
+// Unity reports drone status back to server
+app.post('/api/drone/:droneId/status', (req, res) => {
+    const { droneId } = req.params;
+    const { status, deliveryId } = req.body;
+    console.log(`[UNITY] Drone ${droneId} status: ${status}`);
+
+    // Update delivery status if provided
+    if (deliveryId && deliveries[deliveryId]) {
+        const delivery = deliveries[deliveryId];
+        const oldStatus = delivery.status;
+
+        if (status === 'PICKING_UP') {
+            delivery.status = 'PICKING_UP';
+        } else if (status === 'IN_TRANSIT') {
+            delivery.status = 'IN_TRANSIT';
+        } else if (status === 'ARRIVED') {
+            delivery.status = 'ARRIVED';
+        } else if (status === 'DELIVERED') {
+            delivery.status = 'DELIVERED';
+            delivery.active = false;
+            const destDev = devices[deviceSocketMap[delivery.destId]];
+            if (destDev) destDev.locked = false;
+        } else if (status === 'RETURNING') {
+            delivery.status = 'RETURNING';
+        }
+
+        if (oldStatus !== delivery.status) {
+            io.emit('delivery_status_update', {
+                deliveryId: delivery.id,
+                status: delivery.status
+            });
+            broadcastAllDeliveries();
+        }
+    }
+
+    res.json({ ok: true });
+});
+
+
 // --- Socket Logic ---
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    // Send current state immediately
-    socket.emit('device_list', Object.values(devices));
+    // Send current state immediately (include REST devices)
+    socket.emit('device_list', getAllDevices());
     socket.emit('active_deliveries_update', Object.values(deliveries).filter(d => d.active));
 
     socket.on('join', ({ deviceId, role }) => {
