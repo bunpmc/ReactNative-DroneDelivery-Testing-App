@@ -6,7 +6,7 @@ import { useAppContext } from '../context/AppContext';
 const HomeScreen = ({ navigation }) => {
     const {
         deviceId, role, currentLocation,
-        activeDelivery, activeDeliveries, deliveryStatus,
+        activeDelivery, activeDeliveries, completedDeliveries, deliveryStatus,
         availableDevices, createDelivery,
         setManualLocation, isManualLocation, setIsManualLocation
     } = useAppContext();
@@ -208,7 +208,24 @@ const HomeScreen = ({ navigation }) => {
                             <View key={d.id} style={styles.activeTaskItem}>
                                 <Text style={styles.activeTaskTitle}>📦 {d.items} (x{d.quantity})</Text>
                                 <Text style={styles.activeTaskSub}>{d.droneId} ➡️ {d.destId}</Text>
-                                <Text style={[styles.activeTaskStatus, { color: d.status === 'ARRIVED' ? '#4CAF50' : '#2196F3' }]}>{d.status}</Text>
+                                <Text style={[styles.activeTaskStatus, { color: d.status === 'ARRIVED' ? '#4CAF50' : d.status === 'APPROACHING' ? '#FF9800' : '#2196F3' }]}>{d.status}</Text>
+                            </View>
+                        ))}
+                    </ScrollView>
+
+                    <Text style={styles.sectionTitle}>✅ Đã hoàn thành ({completedDeliveries.length})</Text>
+                    <ScrollView style={styles.completedTasksScroll}>
+                        {completedDeliveries.length === 0 && <Text style={styles.emptyText}>Chưa có nhiệm vụ hoàn thành</Text>}
+                        {completedDeliveries.map(d => (
+                            <View key={d.id} style={styles.completedTaskItem}>
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <Text style={styles.completedTaskTitle}>✅ {d.items} (x{d.quantity})</Text>
+                                    <View style={styles.completedBadge}>
+                                        <Text style={styles.completedBadgeText}>COMPLETED</Text>
+                                    </View>
+                                </View>
+                                <Text style={styles.completedTaskSub}>{d.droneId} ➡️ {d.destId}</Text>
+                                {d.completedAt && <Text style={styles.completedTaskTime}>🕐 {new Date(d.completedAt).toLocaleString()}</Text>}
                             </View>
                         ))}
                     </ScrollView>
@@ -314,6 +331,13 @@ const styles = StyleSheet.create({
     activeTaskTitle: { fontWeight: 'bold', fontSize: 14 },
     activeTaskSub: { fontSize: 12, color: '#666' },
     activeTaskStatus: { fontSize: 11, fontWeight: 'bold', marginTop: 4, textTransform: 'uppercase' },
+    completedTasksScroll: { maxHeight: 200, marginBottom: 10 },
+    completedTaskItem: { backgroundColor: '#E8F5E9', padding: 12, borderRadius: 8, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#2E7D32' },
+    completedTaskTitle: { fontWeight: 'bold', fontSize: 14, color: '#2E7D32' },
+    completedTaskSub: { fontSize: 12, color: '#666', marginTop: 2 },
+    completedTaskTime: { fontSize: 11, color: '#888', marginTop: 4 },
+    completedBadge: { backgroundColor: '#C8E6C9', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+    completedBadgeText: { fontSize: 10, fontWeight: 'bold', color: '#2E7D32' },
     deviceListScroll: { maxHeight: 150 },
     deviceRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 10, backgroundColor: '#f5f5f5', borderRadius: 6, marginBottom: 5 },
     roleTag: { fontSize: 10, color: '#888', backgroundColor: '#eee', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },

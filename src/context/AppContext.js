@@ -14,6 +14,7 @@ export const AppProvider = ({ children }) => {
 
     const [activeDelivery, setActiveDelivery] = useState(null);
     const [activeDeliveries, setActiveDeliveries] = useState([]);
+    const [completedDeliveries, setCompletedDeliveries] = useState([]);
     const [deliveryStatus, setDeliveryStatus] = useState('idle');
     const [otherDeviceLocation, setOtherDeviceLocation] = useState(null);
     const [availableDevices, setAvailableDevices] = useState([]);
@@ -72,7 +73,16 @@ export const AppProvider = ({ children }) => {
                 setActiveDelivery(null);
                 setOtherDeviceLocation(null);
             }
-            setActiveDeliveries(prev => prev.filter(d => d.id !== deliveryId));
+            setActiveDeliveries(prev => {
+                const completedTask = prev.find(d => d.id === deliveryId);
+                if (completedTask) {
+                    setCompletedDeliveries(old => [
+                        { ...completedTask, status: 'COMPLETED', completedAt: new Date().toISOString() },
+                        ...old
+                    ]);
+                }
+                return prev.filter(d => d.id !== deliveryId);
+            });
         };
 
         SocketService.on('device_list', handleDeviceList);
@@ -172,6 +182,7 @@ export const AppProvider = ({ children }) => {
                 availableDevices,
                 activeDelivery,
                 activeDeliveries,
+                completedDeliveries,
                 deliveryStatus,
                 createDelivery,
                 confirmDelivery,
