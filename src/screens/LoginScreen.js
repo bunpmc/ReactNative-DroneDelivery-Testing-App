@@ -4,7 +4,7 @@ import { useAppContext } from '../context/AppContext';
 
 const LoginScreen = ({ navigation }) => {
     const [inputDeviceId, setInputDeviceId] = useState('');
-    const [serverUrl, setServerIp] = useState('http://localhost:3000');
+    const [serverUrl, setServerIp] = useState('https://prayer-judge-angel-hosted.trycloudflare.com');
     const [selectedRole, setSelectedRole] = useState('DRONE');
 
     const { connectToServer } = useAppContext();

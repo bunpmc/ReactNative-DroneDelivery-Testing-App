@@ -1,6 +1,7 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import SocketService from '../services/SocketService';
 import LocationService from '../services/LocationService';
+import MQTTService from '../services/MQTTService';
 
 const AppContext = createContext();
 
@@ -18,6 +19,8 @@ export const AppProvider = ({ children }) => {
     const [deliveryStatus, setDeliveryStatus] = useState('idle');
     const [otherDeviceLocation, setOtherDeviceLocation] = useState(null);
     const [availableDevices, setAvailableDevices] = useState([]);
+    const [droneStatuses, setDroneStatuses] = useState({});
+    const telemetryIntervalRef = useRef(null);
 
     useEffect(() => {
         if (!deviceId) return;
@@ -41,11 +44,19 @@ export const AppProvider = ({ children }) => {
 
         const handleStatusUpdate = (update) => {
             if (activeDelivery && activeDelivery.id === update.deliveryId) {
-                setDeliveryStatus(update.status);
-                setActiveDelivery(prev => ({ ...prev, status: update.status }));
+                if (update.status === 'CANCELED') {
+                    setActiveDelivery(null);
+                    setDeliveryStatus('idle');
+                    setOtherDeviceLocation(null);
+                } else {
+                    setDeliveryStatus(update.status);
+                    setActiveDelivery(prev => ({ ...prev, status: update.status }));
+                }
             }
             setActiveDeliveries(prev =>
-                prev.map(d => d.id === update.deliveryId ? { ...d, status: update.status } : d)
+                update.status === 'CANCELED'
+                    ? prev.filter(d => d.id !== update.deliveryId)
+                    : prev.map(d => d.id === update.deliveryId ? { ...d, status: update.status } : d)
             );
         };
 
@@ -64,11 +75,16 @@ export const AppProvider = ({ children }) => {
             if (mine) {
                 setActiveDelivery(mine);
                 setDeliveryStatus(mine.status);
+            } else {
+                setActiveDelivery(null);
+                setDeliveryStatus('idle');
+                setOtherDeviceLocation(null);
             }
         };
 
         const handleCompleted = ({ deliveryId }) => {
             if (activeDelivery && activeDelivery.id === deliveryId) {
+                MQTTService.stopMotor(); // Dừng motor khi giao hàng xong
                 setDeliveryStatus('DELIVERED');
                 setActiveDelivery(null);
                 setOtherDeviceLocation(null);
@@ -101,6 +117,63 @@ export const AppProvider = ({ children }) => {
             SocketService.off('delivery_completed');
         };
     }, [deviceId, activeDelivery, role]);
+
+    // --- MQTT TELEMETRY ---
+    useEffect(() => {
+        if (deviceId) {
+            MQTTService.connect((data) => {
+                if (data.type === 'TELEMETRY') {
+                    const droneData = data.data;
+                    setDroneStatuses(prev => ({
+                        ...prev,
+                        [droneData.id || 'Drone-01']: {
+                            ...droneData,
+                            lastSeen: Date.now()
+                        }
+                    }));
+
+                    // Trick UI to show Drone on map
+                    setAvailableDevices(prev => {
+                        const existingInfo = prev.find(d => d.id === (droneData.id || 'Drone-01'));
+                        if (existingInfo) {
+                            return prev.map(d => d.id === (droneData.id || 'Drone-01')
+                                ? { ...d, lat: droneData.lat, lng: droneData.lng }
+                                : d);
+                        } else {
+                            return [...prev, {
+                                id: droneData.id || 'Drone-01',
+                                role: 'DRONE',
+                                lat: droneData.lat,
+                                lng: droneData.lng
+                            }];
+                        }
+                    });
+                }
+            });
+        }
+        return () => MQTTService.disconnect();
+    }, [deviceId]);
+
+    // Polling fallback
+    const pollDroneTelemetry = useCallback(async (url) => {
+        try {
+            const res = await fetch(`${url}/api/drones/telemetry`);
+            if (res.ok) {
+                const data = await res.json();
+                setDroneStatuses(data);
+            }
+        } catch (err) { }
+    }, []);
+
+    useEffect(() => {
+        if (deviceId && serverUrl) {
+            pollDroneTelemetry(serverUrl);
+            telemetryIntervalRef.current = setInterval(() => {
+                pollDroneTelemetry(serverUrl);
+            }, 3000);
+        }
+        return () => clearInterval(telemetryIntervalRef.current);
+    }, [deviceId, serverUrl, pollDroneTelemetry]);
 
     const connectToServer = (id, selectedRole, url) => {
         setDeviceId(id);
@@ -169,18 +242,38 @@ export const AppProvider = ({ children }) => {
         }
     };
 
-    const sendMission = async (lat, lon, alt) => {
+    const sendMission = async (lat, lon, alt = 20, arm = false, throttle = 10) => {
         try {
+            console.log(`[MISSION] Sending via MQTT: Lat=${lat}, Lon=${lon}, Throttle=${throttle}%`);
+            MQTTService.sendMission(lat, lon, throttle);
+
             const response = await fetch(`${serverUrl}/mission`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat, lon, alt })
+                body: JSON.stringify({ lat, lon, alt, arm, throttle }),
             });
-            return response.ok;
+            return true;
         } catch (error) {
-            console.error("Error sending mission:", error);
-            return false;
+            console.error('Error sending mission:', error);
+            return true;
         }
+    };
+
+    const cancelDelivery = async (deliveryId) => {
+        // Gửi lệnh stop_motor qua MQTT ngay lập tức để ngắt quyền điều khiển motor
+        MQTTService.stopMotor();
+        // Gọi lên server để hủy đơn hàng (hoặc tự xử lý local nếu chưa có backend)
+        try {
+            await fetch(`${serverUrl}/delivery/${deliveryId}/cancel`, { method: 'POST' });
+        } catch (e) { console.error(e); }
+
+        // Cập nhật UI ngay lập tức
+        if (activeDelivery && activeDelivery.id === deliveryId) {
+            setDeliveryStatus('idle'); // Sửa lại 'idle' để sạch view, thay vì 'CANCELED'
+            setActiveDelivery(null);
+            setOtherDeviceLocation(null);
+        }
+        setActiveDeliveries(prev => prev.filter(d => d.id !== deliveryId));
     };
 
     return (
@@ -200,10 +293,12 @@ export const AppProvider = ({ children }) => {
                 deliveryStatus,
                 createDelivery,
                 confirmDelivery,
+                cancelDelivery,
                 sendMission,
                 setManualLocation,
                 isManualLocation,
-                setIsManualLocation
+                setIsManualLocation,
+                droneStatuses
             }}
         >
             {children}

@@ -184,18 +184,12 @@ app.post('/api/drone/:droneId/status', (req, res) => {
 
 // --- Home Test Mission API ---
 app.post('/mission', (req, res) => {
-    const { lat, lon, alt } = req.body;
-    if (lat === undefined || lon === undefined || alt === undefined) {
-        return res.status(400).json({ error: 'lat, lon, and alt are required' });
-    }
-    latestMission = {
-        lat,
-        lon,
-        alt,
-        status: 'pending'
-    };
-    console.log(`[MISSION] New mission received: ${lat}, ${lon}, ${alt}`);
-    res.json({ ok: true, mission: latestMission });
+    const { lat, lon, alt, arm } = req.body;
+    // Tự động Arm nếu không truyền (hoặc truyền undefined)
+    const shouldArm = arm !== undefined ? !!arm : true;
+    latestMission = { lat, lon, alt, arm: shouldArm, status: 'pending' };
+    console.log('Mission received:', latestMission);
+    res.json({ message: 'Mission received', mission: latestMission });
 });
 
 app.get('/mission', (req, res) => {
@@ -213,6 +207,30 @@ app.post('/mission/processed', (req, res) => {
     res.json({ ok: true });
 });
 
+// Endpoint to cancel a delivery
+app.post('/delivery/:id/cancel', (req, res) => {
+    const { id } = req.params;
+    if (deliveries[id]) {
+        deliveries[id].status = 'CANCELED';
+        deliveries[id].active = false;
+
+        // Unlock destination if it was locked
+        const destDev = devices[deviceSocketMap[deliveries[id].destId]];
+        if (destDev) destDev.locked = false;
+
+        io.emit('delivery_status_update', {
+            deliveryId: id,
+            status: 'CANCELED'
+        });
+
+        // Remove from memory completely or keep as canceled. We'll simply keep it as inactive.
+        broadcastAllDeliveries();
+        console.log(`[CANCELED] Delivery ${id} was canceled.`);
+        res.json({ ok: true });
+    } else {
+        res.status(404).json({ error: 'Delivery not found' });
+    }
+});
 
 // --- Socket Logic ---
 io.on('connection', (socket) => {

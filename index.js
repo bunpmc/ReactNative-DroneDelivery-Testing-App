@@ -1,4 +1,9 @@
 import { registerRootComponent } from 'expo';
+import { Buffer } from 'buffer';
+
+global.Buffer = Buffer;
+process.browser = true; // Cần thiết cho thư viện mqtt
+
 
 import App from './App';
 

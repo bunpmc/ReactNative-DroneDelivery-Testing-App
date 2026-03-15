@@ -3,7 +3,7 @@ import serial
 import struct
 import time
 import logging
-
+import os
 # --- Configuration ---
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD = 115200
@@ -126,8 +126,8 @@ def main():
         return
 
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-        logger.info(f"Connected to {SERIAL_PORT} at {BAUD_RATE}")
+        ser = serial.Serial(SERIAL_PORT, BAUD, timeout=0.1)
+        logger.info(f"Connected to {SERIAL_PORT} at {BAUD}")
         
         # Test connection by requesting STATUS (101)
         logger.info("Testing connection to INAV...")
@@ -144,26 +144,36 @@ def main():
                 lat = mission['lat']
                 lon = mission['lon']
                 alt = mission.get('alt', 20)
+                should_arm = mission.get('arm', False)
                 
                 lat_i = int(lat * 1e7)
                 lon_i = int(lon * 1e7)
                 alt_cm = int(alt * 100)
                 
-                logger.info(f"Uploading mission to INAV: Lat={lat}, Lon={lon}, Alt={alt}")
+                logger.info(f"Uploading mission to INAV: Lat={lat}, Lon={lon}, Alt={alt}, Arm={should_arm}")
                 
-                # Try sending as Waypoint #0 (First point)
+                # 1. Send Waypoint
                 wp_packet = build_msp_wp(lat_i, lon_i, alt_cm, wp_index=0)
                 ser.write(wp_packet)
                 
                 if wait_for_ack(ser, MSP_SET_WP):
-                    logger.info("INAV Accepted Waypoint #0 (ACK received)")
+                    logger.info("INAV Accepted Waypoint #0")
                     
-                    # Save to EEPROM
+                    # 2. Arm if requested
+                    if should_arm:
+                        logger.info("Arming drone motors...")
+                        ser.write(build_msp_packet(MSP_ARM, b''))
+                        if wait_for_ack(ser, MSP_ARM):
+                            logger.info("INAV Armed successfully")
+                        else:
+                            logger.warning("INAV ARM command ignored or failed (Check safety flags in INAV Configurator)")
+
+                    # 3. Save to EEPROM
                     ser.write(build_msp_packet(MSP_EEPROM_WRITE, b''))
                     if wait_for_ack(ser, MSP_EEPROM_WRITE):
                         logger.info("INAV Saved Mission to EEPROM")
                 else:
-                    logger.error("INAV Rejected or Ignored Waypoint packet (No ACK)")
+                    logger.error("INAV Rejected Waypoint packet")
                 
                 mark_mission_processed()
                 logger.info("Backend updated.")
