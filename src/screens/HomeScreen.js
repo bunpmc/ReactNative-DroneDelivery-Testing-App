@@ -91,7 +91,11 @@ const HomeScreen = ({ navigation }) => {
         setMissionStatus('Đang gửi...');
         // Tự động Arm khi gửi nhiệm vụ
         const ok = await sendMission(parseFloat(missionLat), parseFloat(missionLon), parseFloat(missionAlt), true);
+        // Tự động Arm khi gửi nhiệm vụ
+        const ok = await sendMission(parseFloat(missionLat), parseFloat(missionLon), parseFloat(missionAlt), true);
         if (ok) {
+            setMissionStatus('🚀 Đã gửi! (Motor sẽ tự động quay)');
+            setTimeout(() => setMissionStatus(''), 5000);
             setMissionStatus('🚀 Đã gửi! (Motor sẽ tự động quay)');
             setTimeout(() => setMissionStatus(''), 5000);
         } else {
@@ -559,6 +563,9 @@ const styles = StyleSheet.create({
     sendMissionText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
     missionStatusText: { textAlign: 'center', marginTop: 10, fontSize: 12, fontWeight: 'bold', color: '#8b5cf6' },
     missionHint: { fontSize: 10, color: '#94a3b8', marginTop: 8, fontStyle: 'italic', textAlign: 'center' },
+    autoArmMessage: { backgroundColor: '#fff1f2', padding: 10, borderRadius: 8, marginTop: 15, borderWidth: 1, borderColor: '#fecaca', alignItems: 'center' },
+    armText: { fontSize: 12, fontWeight: 'bold', color: '#dc2626', marginBottom: 2 },
+    safetyHint: { fontSize: 10, color: '#ef4444', fontWeight: 'bold' },
     autoArmMessage: { backgroundColor: '#fff1f2', padding: 10, borderRadius: 8, marginTop: 15, borderWidth: 1, borderColor: '#fecaca', alignItems: 'center' },
     armText: { fontSize: 12, fontWeight: 'bold', color: '#dc2626', marginBottom: 2 },
     safetyHint: { fontSize: 10, color: '#ef4444', fontWeight: 'bold' },
